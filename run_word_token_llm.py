@@ -1,5 +1,5 @@
 import json
-from os.path import expanduser
+
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
@@ -14,8 +14,6 @@ with open("idx2token.json", "r") as f:
 
 vocab_size = len(token2idx)
 max_len = 100
-
-
 
 # --- 2. Prepare the same dataset using Nietzsche text ---
 dataset_path = keras.utils.get_file('nietzche.txt', origin='https://s3.amazonaws.com/text-datasets/nietzsche.txt')
