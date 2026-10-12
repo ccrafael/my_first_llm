@@ -1,15 +1,15 @@
-import keras
+from os.path import expanduser
+
 import numpy as np
-import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras import layers
+
+home = expanduser("~")
 
 # --- Download Nietzsche dataset ---
-keras.utils.get_file('nietzche.txt', origin='https://s3.amazonaws.com/text-datasets/nietzsche.txt')
-path = "/home/rafael/.keras/datasets/nietzche.txt"
+dataset_path = keras.utils.get_file('nietzche.txt', origin='https://s3.amazonaws.com/text-datasets/nietzsche.txt')
 
 # --- Read and prepare text ---
-with open(path, 'r', encoding='utf-8') as f:
+with open(dataset_path, 'r', encoding='utf-8') as f:
     text = f.read()
 
 print(f"Dataset size: {len(text)} characters")
@@ -29,7 +29,7 @@ seq_length = 50
 xs = []
 ys = []
 for i in range(0, len(tokens) - seq_length, 1):
-    xs.append([token2idx[tokens[i+j]] for j in range(seq_length)])
+    xs.append([token2idx[tokens[i + j]] for j in range(seq_length)])
     ys.append(token2idx[tokens[i + seq_length]])
 
 X = np.array(xs)
@@ -40,6 +40,7 @@ print(f"X shape: {X.shape}, Y shape: {Y.shape}")
 
 # --- Save token mappings ---
 import json
+
 with open("token2idx.json", "w") as f:
     json.dump(token2idx, f)
 with open("idx2token.json", "w") as f:

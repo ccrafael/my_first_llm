@@ -1,9 +1,10 @@
 import json
+from os.path import expanduser
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras import layers
-from myLLM import CustomLLM, LLMDecoderBlock
+
+from myLLM import CustomLLM
 
 # --- 1. Load token mappings ---
 with open("token2idx.json", "r") as f:
@@ -14,17 +15,19 @@ with open("idx2token.json", "r") as f:
 vocab_size = len(token2idx)
 max_len = 100
 
-# --- 2. Prepare the same dataset using Nietzsche text ---
-keras.utils.get_file('nietzche.txt', origin='https://s3.amazonaws.com/text-datasets/nietzsche.txt')
-path = "/home/rafael/.keras/datasets/nietzche.txt"
 
-with open(path, 'r', encoding='utf-8') as f:
+
+# --- 2. Prepare the same dataset using Nietzsche text ---
+dataset_path = keras.utils.get_file('nietzche.txt', origin='https://s3.amazonaws.com/text-datasets/nietzsche.txt')
+with open(dataset_path, 'r', encoding='utf-8') as f:
     text = f.read()
 
 tokens = text.split()
 
+
 def text_to_ids(text_tokens):
     return [token2idx[t] for t in text_tokens if t in token2idx]
+
 
 ids = text_to_ids(tokens)
 
@@ -50,18 +53,22 @@ model.compile(optimizer=optimizer, loss=loss_fn, metrics=['accuracy'], jit_compi
 model.summary()
 
 # --- 5. Train ---
+
+# enable tensorboard logs
+tensorboard_callback = keras.callbacks.TensorBoard(log_dir="./logs")
+
 print("Starting training...")
-model.fit(X, Y, batch_size=32, epochs=1)
+model.fit(X, Y, batch_size=32, epochs=2, callbacks=[tensorboard_callback])
 
 model.summary()
 
 keras.utils.plot_model(
     model,
-    to_file="simple_llm_model.png", # Save the plot to a file
-    show_shapes=True,             # Display shape information
-    show_layer_names=True,        # Display layer names
+    to_file="simple_llm_model.png",  # Save the plot to a file
+    show_shapes=True,  # Display shape information
+    show_layer_names=True,  # Display layer names
     show_layer_activations=True,  # Display activation functions
-    rankdir="TB"                  # Orientation: TB=Top-to-Bottom, LR=Left-to-Right
+    rankdir="TB"  # Orientation: TB=Top-to-Bottom, LR=Left-to-Right
 )
 
 # --- 6. Generate text ---
@@ -77,7 +84,7 @@ for _ in range(50):
         padded = [0] * pad_len + generated
     else:
         padded = generated[-max_len:]
-    
+
     pred = model.predict(np.array([padded]), verbose=0)[0]
     next_logits = pred[-1]
     next_idx = int(tf.argmax(next_logits).numpy())
