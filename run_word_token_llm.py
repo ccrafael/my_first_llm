@@ -6,6 +6,11 @@ from tensorflow import keras
 
 from myLLM import CustomLLM
 
+
+def text_to_ids(text_tokens):
+    return [token2idx[t] for t in text_tokens if t in token2idx]
+
+
 # --- 1. Load token mappings ---
 with open("token2idx.json", "r") as f:
     token2idx = json.load(f)
@@ -16,17 +21,14 @@ vocab_size = len(token2idx)
 max_len = 100
 
 # --- 2. Prepare the same dataset using Nietzsche text ---
-dataset_path = keras.utils.get_file('nietzche.txt', origin='https://s3.amazonaws.com/text-datasets/nietzsche.txt')
+dataset_path = keras.utils.get_file(
+    'nietzche.txt',
+    origin='https://s3.amazonaws.com/text-datasets/nietzsche.txt')
+
 with open(dataset_path, 'r', encoding='utf-8') as f:
     text = f.read()
 
 tokens = text.split()
-
-
-def text_to_ids(text_tokens):
-    return [token2idx[t] for t in text_tokens if t in token2idx]
-
-
 ids = text_to_ids(tokens)
 
 seq_length = 50
