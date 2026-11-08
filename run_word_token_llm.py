@@ -43,7 +43,7 @@ Y = np.array(ys)
 
 # --- 3. Initialize the model ---
 print("Building model...")
-model = CustomLLM(vocab_size, max_len, embed_dim=256, num_heads=4, ff_dim=512)
+model = CustomLLM(vocab_size, max_len, embed_dim=256, num_heads=8, ff_dim=512)
 
 # --- 4. Compile ---
 loss_fn = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
@@ -55,10 +55,11 @@ model.summary()
 # --- 5. Train ---
 
 # enable tensorboard logs
-tensorboard_callback = keras.callbacks.TensorBoard(log_dir="./logs")
+#tensorboard_callback = keras.callbacks.TensorBoard(log_dir="./logs")
 
 print("Starting training...")
-model.fit(X, Y, batch_size=32, epochs=2, callbacks=[tensorboard_callback])
+#model.fit(X, Y, batch_size=32, epochs=2, [tensorboard_callback])
+model.fit(X, Y, batch_size=32, epochs=2)
 
 model.summary()
 
@@ -73,23 +74,38 @@ keras.utils.plot_model(
 
 # --- 6. Generate text ---
 print("\nGenerating text...")
-# Start with a prefix sequence
-start_seq = X[0].tolist()  # first sequence from training
+# Start with a prefix sequence from the training data
+start_seq = X[0].tolist() 
 generated = start_seq.copy()
 
-for _ in range(50):
-    # Pad to max_len
-    pad_len = max_len - len(generated)
-    if pad_len > 0:
-        padded = [0] * pad_len + generated
-    else:
-        padded = generated[-max_len:]
 
-    pred = model.predict(np.array([padded]), verbose=0)[0]
-    next_logits = pred[-1]
-    next_idx = int(tf.argmax(next_logits).numpy())
+# Step A: Initialize the cache with the prompt sequence
+# Convert prompt sequence to array layout: (batch_size=1, seq_len)
+current_input = np.array([start_seq])
+
+# Call model directly using the return_cache option
+logits, cache = model(current_input, training=False, return_cache=True)
+
+# Extract the prediction for the absolute last token of the prompt sequence
+next_token_logits = logits[0, -1, :]
+next_idx = int(tf.argmax(next_token_logits).numpy())
+generated.append(next_idx)
+
+
+# Step B: Auto-regressive loop using the cache step-by-step
+for _ in range(50):
+    # We ONLY pass the single latest token index! Sequence length = 1
+    current_input = np.array([[next_idx]])
+
+    # Pass the running history state ('cache') back into the model
+    logits, cache = model(current_input, training=False, cache=cache, return_cache=True)
+
+    # Because input shape sequence dimension is 1, index the unique token position
+    next_token_logits = logits[0, 0, :]
+    next_idx = int(tf.argmax(next_token_logits).numpy())
     generated.append(next_idx)
 
-# Convert back to tokens
+# Convert back to readable text tokens
 generated_text = " ".join([idx2token[str(i)] for i in generated if str(i) in idx2token])
-print(f"Generated text (first 200 chars): {generated_text[:200]}")
+print(f"\nGenerated text output:\n{generated_text}")
+

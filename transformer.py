@@ -3,13 +3,14 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import pandas as pd
 
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+#device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cpu"
 model_name = "gpt2-xl"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
 
 input_txt = "Transformers are the"
-input_ids = tokenizer(input_txt, return_tensor="pt")["input_ids"].to(device)
+input_ids = tokenizer(input_txt, return_tensors="pt")["input_ids"].to(device)
 iterations = []
 n_steps = 8
 choices_per_step = 5
@@ -21,7 +22,7 @@ with torch.no_grad():
         output = model(input_ids=input_ids)
         # select logits of the first batch and the last token and apply softmax
         next_token_logits = output.logits[0, -1, :]
-        next_token_probs = torch.sotmax(next_token_logits, dim=-1)
+        next_token_probs = torch.softmax(next_token_logits, dim=-1)
         sorted_ids = torch.argsort(next_token_probs, dim=-1, descending=True)
         # Store tokens with hightest probabilities
         for choice_idx in range(choices_per_step):
@@ -37,4 +38,5 @@ with torch.no_grad():
         input_ids = torch.cat([input_ids, sorted_ids[None, 0, None]], dim=-1)
         iterations.append(iteration)
 
-pd.DataFrame(iterations)
+df = pd.DataFrame(iterations)
+print(df)
