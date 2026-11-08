@@ -43,15 +43,20 @@ class AttentionHead(layers.Layer):
         if use_causal_mask:
             seq_len_q = tf.shape(query)[1]
             seq_len_k = tf.shape(key)[1]
-            # Create a matrix of 1s and 0s where 1 means "keep" and 0 means "mask out"
-            # I look back from the end of the key sequence length
-            causal_mask = tf.linalg.band_part(tf.ones((seq_len_q, seq_len_k)), -1, 0)
+
+            # Calculate the sequence context gap offset
+            offset = seq_len_k - seq_len_q
+            
+            causal_mask = tf.range(seq_len_k)[None, :] <= tf.range(seq_len_q)[:, None] + offset
+            causal_mask = tf.cast(causal_mask, tf.float32)
+
             # Expand dimensions to broadcast over the batch: (1, seq_len_q, seq_len_k)
             causal_mask = tf.expand_dims(causal_mask, axis=0)
 
             # Apply the mask by adding a very large negative number to masked-out spots
             # When softmax hits -1e9, it turns into exactly 0.0 probability
-            scores = tf.where(causal_mask == 1, scores, -1e9)
+            scores = tf.where(causal_mask == 1.0, scores, -1e9)
+
 
         # Additional padding mask if passed explicitly from tokenization step
         if mask is not None:
