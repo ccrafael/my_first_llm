@@ -2,6 +2,77 @@
 
 This project implements a lightweight LLM-style decoder for text generation. The model is built from **custom attention layers** (hand-written scaled dot-product attention, not `layers.MultiHeadAttention`) and learns to predict the next token in a sequence. It can generate text autoregressively using a per-head **Key-Value (KV) cache** for efficiency.
 
+## Model Architecture
+
+Shapes assume the word-level training run: **batch=32, seq_len=50, vocab=18809, embed_dim=256, heads=8 (head_dim=32), ff_dim=512, max_len=100**.
+
+```mermaid
+flowchart TD
+    INPUT["Token IDs<br/>(32, 50)"]
+    TOKEMB["token_emb Embedding 18809 → 256<br/>(32, 50, 256)"]
+    POSEMB["pos_emb Embedding 100 → 256<br/>positions 0..49<br/>(1, 50, 256)"]
+    ADD0(("+"))
+
+    INPUT --> TOKEMB
+    INPUT --> POSEMB
+    TOKEMB --> ADD0
+    POSEMB --> ADD0
+
+    ADD0 --> Q
+    ADD0 --> K
+    ADD0 --> V
+
+    subgraph MHA["MultiHeadAttention — embed_dim=256, 8 heads"]
+        direction TB
+        subgraph HEADS["AttentionHead × 8 — head_dim=32"]
+            direction TB
+            Q["Dense q 256 → 32<br/>(32, 50, 32)"]
+            K["Dense k 256 → 32<br/>(32, 50, 32)"]
+            V["Dense v 256 → 32<br/>(32, 50, 32)"]
+            KC["concat prev K, axis=1<br/>(32, past+50, 32)"]
+            VC["concat prev V, axis=1<br/>(32, past+50, 32)"]
+            SCORES["Q · Kᵀ / √32<br/>(32, 50, past+50)"]
+            CAUSAL["causal mask → -1e9<br/>(32, 50, past+50)"]
+            SM["softmax<br/>(32, 50, past+50)"]
+            CTX["weights · V<br/>(32, 50, 32)"]
+            Q --> SCORES
+            K --> KC --> SCORES
+            V --> VC
+            SCORES --> CAUSAL --> SM --> CTX
+            VC --> CTX
+        end
+        KVCACHE[("KV cache — per head<br/>K, V: (32, past, 32)")]
+        KC -.->|save| KVCACHE
+        VC -.->|save| KVCACHE
+        KVCACHE -.->|prev| KC
+        KVCACHE -.->|prev| VC
+        CAT["concat 8 heads, axis=-1<br/>(32, 50, 256)"]
+        OUTL["output_linear Dense 256 → 256<br/>(32, 50, 256)"]
+        CTX --> CAT --> OUTL
+    end
+
+    D1["Dropout 0.1"]
+    RES1(("+"))
+    LN1["LayerNormalization"]
+
+    OUTL --> D1
+    ADD0 -->|residual| RES1
+    D1 --> RES1 --> LN1
+
+    FFN1["Dense 256 → 512, ReLU<br/>(32, 50, 512)"]
+    FFN2["Dense 512 → 256<br/>(32, 50, 256)"]
+    D2["Dropout 0.1"]
+    RES2(("+"))
+    LN2["LayerNormalization"]
+    LOGITS["final Dense 256 → 18809<br/>logits (32, 50, 18809)"]
+
+    LN1 --> FFN1 --> FFN2 --> D2
+    LN1 -->|residual| RES2
+    D2 --> RES2 --> LN2 --> LOGITS
+```
+
+During cached generation the shapes change to `batch=1, seq_len=1` (e.g. input `(1, 1)` → logits `(1, 1, 18809)`), and the attention scores become `(1, 1, past)` against the cached keys. During training `past=0`.
+
 ## Requirements
 
 Install the pinned dependencies from `requirements.txt`:
@@ -10,20 +81,18 @@ Install the pinned dependencies from `requirements.txt`:
 pip install -r requirements.txt
 ```
 
-The core model/training stack is TensorFlow + Keras 3; the optional `transformer.py` analysis script additionally uses `torch`, `transformers`, and `pandas`. `pydot` is used to render the model diagram (`simple_llm_model.png`).
+The core model/training stack is TensorFlow + Keras 3. `pydot` is used to render the model diagram (`simple_llm_model.png`).
 
 ## 1. Vocabulary Creation
 
-Vocabularies are pre-built from text corpora and saved as JSON mappings:
+The vocabulary is pre-built from a text corpus and saved as JSON mappings:
 
 - **`token2idx.json` / `idx2token.json`**: word-level vocabulary from the Nietzsche corpus
-- **`char2idx.json` / `idx2char.json`**: character-level vocabulary from a small hard-coded corpus
 
-The corpus scripts are:
+The corpus script is:
 
 ```bash
 python create_word_token_corpus.py   # word-level, Nietzsche corpus
-python create_char_token_corpus.py   # character-level, small corpus
 ```
 
 `create_word_token_corpus.py`:
@@ -33,13 +102,7 @@ python create_char_token_corpus.py   # character-level, small corpus
 3. Builds `token2idx` and `idx2token` mappings with `enumerate(set(tokens))`
 4. Saves both mappings as JSON files
 
-`create_char_token_corpus.py`:
-
-1. Uses a small built-in corpus (a few sentences about AI/transformers)
-2. Builds `char2idx` / `idx2char` from `sorted(set(corpus))`
-3. Saves the mappings as JSON files
-
-The vocabulary is loaded at runtime by the run scripts. Text is converted to IDs via lookups; unknown tokens are ignored:
+The vocabulary is loaded at runtime by the run script. Text is converted to IDs via lookups; unknown tokens are ignored:
 
 ```python
 def text_to_ids(text_tokens):
@@ -153,20 +216,17 @@ The model itself has a single transformer block (one `LLMDecoderBlock`).
 
 ## 8. Training
 
-Both run scripts compile with Adam (`learning_rate=0.001`) and `SparseCategoricalCrossentropy(from_logits=True)`:
+The run script compiles with Adam (`learning_rate=0.001`) and `SparseCategoricalCrossentropy(from_logits=True)`:
 
 ```python
 model.compile(optimizer=optimizer, loss=loss_fn, metrics=['accuracy'], jit_compile=False)
 ```
 
 - **Word-level** (`run_word_token_llm.py`): `CustomLLM(vocab_size, max_len=100, embed_dim=256, num_heads=8, ff_dim=512)`, `model.fit(X, Y, batch_size=32, epochs=2)`, then saves a diagram to `simple_llm_model.png` via `keras.utils.plot_model`
-- **Character-level** (`run_char_token_llm.py`): `CustomLLM(vocab_size, max_len=100, embed_dim=256, num_heads=4, ff_dim=512)`, `model.fit(X, Y, batch_size=32, epochs=3)`
 
 A commented TensorBoard callback (`log_dir="./logs"`) is available in the word-level script.
 
-## 9. Generation
-
-### Word-level: cached, one-token-at-a-time (`run_word_token_llm.py`)
+## 9. Generation (cached, one-token-at-a-time — `run_word_token_llm.py`)
 
 Step A — run the prompt (a training sequence, length 50) through the model once to build the cache, and take the last position's prediction:
 
@@ -188,33 +248,13 @@ for _ in range(50):
 
 Because keys/values are cached per head, each step computes attention for only the new token. Next tokens are chosen greedily with `argmax`, then decoded back to text via `idx2token`.
 
-### Character-level: no cache (`run_char_token_llm.py`)
-
-The char script does **not** use the cache: at each step it left-pads the generated IDs to `max_len` (100) with `0`s and runs a full `model.predict`, reading the last position's logits:
-
-```python
-padded = [0] * (max_len - len(generated)) + generated
-pred = model.predict(np.array([padded]), verbose=0)[0]
-next_idx = int(tf.argmax(pred[-1]).numpy())
-```
-
-## 10. Auxiliary Scripts
-
-- **`transformer.py`**: standalone analysis of a pretrained **GPT-2 XL** (`gpt2-xl`) via HuggingFace `transformers` on CPU. For 8 greedy decoding steps it records the top-5 next-token probabilities at each step and prints them as a `pandas` DataFrame — useful for seeing how a production LLM's output distribution behaves.
-- **`transformer_decoder.py`**: a Keras `TransformerDecoderBlock` example for **encoder–decoder** architectures: masked self-attention → cross-attention (queries from the decoder, keys/values from `encoder_out`) → FFN, each with dropout + LayerNorm. Demonstrated on dummy random tensors; it is a teaching example, independent from `myLLM.py`.
-
 ---
 
 ## Files
 
 - **`myLLM.py`**: model definition — `AttentionHead`, `MultiHeadAttention`, `LLMDecoderBlock`, `CustomLLM`
 - **`run_word_token_llm.py`**: word-level GPT-style script — trains on the Nietzsche corpus (`token2idx.json`/`idx2token.json`), `seq_length=50`, cached generation
-- **`run_char_token_llm.py`**: character-level LLM — trains on the small corpus (`char2idx.json`/`idx2char.json`), `seq_length=50`, cache-free padded generation
 - **`create_word_token_corpus.py`**: generates the word-level vocabulary JSON files from the Nietzsche corpus
-- **`create_char_token_corpus.py`**: generates the character-level vocabulary JSON files from the small corpus
 - **`token2idx.json` / `idx2token.json`**: pre-built word-level vocabulary mappings
-- **`char2idx.json` / `idx2char.json`**: pre-built character-level vocabulary mappings
-- **`transformer.py`**: GPT-2 XL next-token probability analysis (HuggingFace)
-- **`transformer_decoder.py`**: encoder–decoder `TransformerDecoderBlock` example with cross-attention
 - **`simple_llm_model.png`**: generated Keras model diagram of the word-level LLM
-- **`requirements.txt`**: pinned dependencies (tensorflow 2.21.0, keras 3.15.1, numpy, pydot, torch, transformers, pandas)
+- **`requirements.txt`**: pinned dependencies (tensorflow 2.21.0, keras 3.15.1, numpy, pydot)
